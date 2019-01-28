@@ -500,9 +500,16 @@ class FP16_Optimizer(object):
 
         1. fp32_loss = loss.float() (see first Note below)
         2. scaled_loss = fp32_loss*loss_scale
-        3. scaled_loss.backward(), which accumulates scaled gradients into the ``.grad`` attributes of the model's leaves (which may be fp16, fp32, or a mixture, depending how your model was defined).
-        4. fp16 grads are then copied to the master params' ``.grad`` attributes (see second Note), which are guaranteed to be fp32.
+        3. scaled_loss.backward(), which accumulates scaled gradients into the 
+            ``.grad`` attributes of the model's leaves (which may be fp16, fp32, 
+            or a mixture, depending how your model was defined).
+        4. fp16 grads are then copied to the master params' ``.grad`` attributes 
+            (see second Note), which are guaranteed to be fp32.
         5. Finally, master grads are divided by loss_scale.
+
+        As above descript, the gradient calcutation (also backward) operation 
+        will using float16 data type, while parameters update will using 
+        float32.
 
         In this way, after :attr:`backward`, the master params have fresh gradients,
         and :attr:`step` may be called.
