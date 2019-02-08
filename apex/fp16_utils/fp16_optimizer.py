@@ -195,6 +195,8 @@ class FP16_Optimizer(object):
                         )
                         # Cache current float16 tensor, which will be used
                         # in calculation later.
+                        # 
+                        # Notice, not detach.
                         fp16_params_this_group.append(param)
 
                         # Create float32 master copy.
@@ -206,6 +208,7 @@ class FP16_Optimizer(object):
                         param_group['params'][i] = master_param
 
                         # Put float32 copy in corresponding buffer.
+                        # Notice, these fp32 copies were detached. 
                         fp32_from_fp16_params_this_group.append(master_param)
 
                         # Reset existing state dict key to the new master param.
@@ -312,7 +315,8 @@ class FP16_Optimizer(object):
 
     def zero_grad(self, set_grads_to_None=False):
         """ Zero fp32 and fp16 parameter grads.
-        Both float16 and float32 parameter copy will be set to zero.
+        Both float16 and float32 un-detached parameter 
+        copies will be set to zero.
         """
         # In principle, only the .grad attributes of the model 
         # params need to be zeroed, because gradients are copied 
@@ -345,6 +349,12 @@ class FP16_Optimizer(object):
                         param.grad.zero_()
 
     def _check_overflow(self):
+        """ Check if any overflow happened.
+        This method will iterally check if the parameters 
+        in `self.fp16_groups` and `self.fp32_from_fp32_groups` 
+        overflow, notice only parameters in these two groups 
+        were not detached. 
+        """
         params = []
         # Iteration along all float16 tensors.
         for group in self.fp16_groups:
@@ -359,22 +369,39 @@ class FP16_Optimizer(object):
         self.overflow = self.loss_scaler.has_overflow(params)
 
     def _update_scale(self, has_overflow=False):
+        """ Updates loss scaling factor.
+        Updates loss scaling factor according overflow 
+        proportion among all parameters. Which is the return 
+        of ` _check_overflow`. 
+        """
         self.loss_scaler.update_scale(has_overflow)
 
     def _master_params_to_model_params(self):
+        """
+        """
         for fp16_group, fp32_from_fp16_group in \
             zip(self.fp16_groups, self.fp32_from_fp16_groups):
             master_params_to_model_params(
                 fp16_group, fp32_from_fp16_group
             )
 
-    # To consider:  Integrate distributed with this wrapper by registering a hook on each variable 
-    # that does the overflow check, gradient copy + downscale, and fp32 allreduce in a different stream.
+    # To consider:  
+    # Integrate distributed with this wrapper by registering 
+    # a hook on each variable that does the overflow check, 
+    # gradient copy + downscale, and fp32 allreduce in a 
+    # different stream.
     def _model_grads_to_master_grads(self):
-        for fp16_group, fp32_from_fp16_group in zip(self.fp16_groups, self.fp32_from_fp16_groups):
-            model_grads_to_master_grads(fp16_group, fp32_from_fp16_group)
+        for fp16_group, fp32_from_fp16_group in \
+            zip(self.fp16_groups, self.fp32_from_fp16_groups):
+            model_grads_to_master_grads(
+                fp16_group, fp32_from_fp16_group
+            )
 
     def _downscale_master(self):
+        """ Downscale values.
+        Downscale values with loss scaling factor stored by
+        `self.loss_scale`. 
+        """
         if self.loss_scale != 1.0: 
             for group in self.optimizer.param_groups:
                 for param in group['params']:
@@ -383,18 +410,22 @@ class FP16_Optimizer(object):
 
     def clip_master_grads(self, max_norm, norm_type=2):
         """
-        Clips fp32 master gradients via ``torch.nn.utils.clip_grad_norm``.
+        Clips fp32 master gradients via 
+        ``torch.nn.utils.clip_grad_norm``.
 
         Args:
             max_norm (float or int): max norm of the gradients
-            norm_type (float or int): type of the used p-norm. Can be ``'inf'`` for
+            norm_type (float or int): 
+                type of the used p-norm. Can be ``'inf'`` for
                 infinity norm.
 
         Returns:
-            Total norm of the current fp32 gradients (viewed as a single vector).
+            Total norm of the current fp32 gradients 
+            (viewed as a single vector).
 
         .. warning::
-            Returns -1 if the most recently computed fp16 gradients overflowed (that is, if ``self.overflow`` is ``True``).
+            Returns -1 if the most recently computed fp16 gradients 
+            overflowed (that is, if ``self.overflow`` is ``True``).
         """
         if not self.overflow:
             fp32_params = []
@@ -407,9 +438,12 @@ class FP16_Optimizer(object):
 
     def state_dict(self):
         """
-        Returns a dict containing the current state of this :class:`FP16_Optimizer` instance.
-        This dict contains attributes of :class:`FP16_Optimizer`, as well as the state_dict
-        of the contained Pytorch optimizer.
+        Returns a dict containing the current state of this 
+        :class:`FP16_Optimizer` instance.
+
+        This dict contains attributes of :class:`FP16_Optimizer`, 
+        as well as the state_dict of the contained Pytorch optimizer.
+
         Example::
 
             checkpoint = {}
@@ -421,50 +455,70 @@ class FP16_Optimizer(object):
         state_dict['loss_scaler'] = self.loss_scaler
         state_dict['dynamic_loss_scale'] = self.dynamic_loss_scale
         state_dict['overflow'] = self.overflow
-        state_dict['first_closure_call_this_step'] = self.first_closure_call_this_step
-        state_dict['optimizer_state_dict'] = self.optimizer.state_dict()
+        state_dict['first_closure_call_this_step'] = \
+            self.first_closure_call_this_step
+        state_dict['optimizer_state_dict'] = \
+            self.optimizer.state_dict()
         state_dict['fp32_from_fp16'] = self.fp32_from_fp16_groups
         return state_dict
 
     def load_state_dict(self, state_dict):
         """
         Loads a state_dict created by an earlier call to state_dict(). 
-        If ``fp16_optimizer_instance`` was constructed from some ``init_optimizer``, 
-        whose parameters in turn came from ``model``, it is expected that the user 
-        will call ``model.load_state_dict()`` before
-        ``fp16_optimizer_instance.load_state_dict()`` is called.
+        If ``fp16_optimizer_instance`` was constructed from some 
+        ``init_optimizer``, whose parameters in turn came from ``model``, 
+        it is expected that the user will call ``model.load_state_dict()`` 
+        before ``fp16_optimizer_instance.load_state_dict()`` is called.
+
+        The `model.state_dict` holds the model's information, such as 
+        parameters, similiar, the `FP16_Optimizer.state_dict()` will 
+        return `FP16_Optimizer`'s information, such as overflow info list, 
+        loss scaling factor, etc. 
 
         Example::
 
             model = torch.nn.Linear(D_in, D_out).cuda().half()
             optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
-            optimizer = FP16_Optimizer(optimizer, static_loss_scale = 128.0)
+            optimizer = FP16_Optimizer(
+                optimizer, static_loss_scale = 128.0
+            )
             ...
             checkpoint = torch.load("saved.pth")
             model.load_state_dict(checkpoint['model'])
             optimizer.load_state_dict(checkpoint['optimizer'])
         """
-        # I think it should actually be ok to reload the optimizer before the model.
+        # I think it should actually be ok to reload the 
+        # optimizer before the model.
         self.loss_scaler = state_dict['loss_scaler']
         self.dynamic_loss_scale = state_dict['dynamic_loss_scale']
         self.overflow = state_dict['overflow']
-        self.first_closure_call_this_step = state_dict['first_closure_call_this_step']
-        self.optimizer.load_state_dict(state_dict['optimizer_state_dict'])
-        # At this point, the optimizer's references to the model's fp32 parameters are up to date.
-        # The optimizer's hyperparameters and internal buffers are also up to date.  
-        # However, the fp32 master copies of the model's fp16 params stored by the optimizer are still
-        # out of date.  There are two options.  
-        # 1:  Refresh the master params from the model's fp16 params.  
-        # This requires less storage but incurs precision loss.
-        # 2:  Save and restore the fp32 master copies separately.
-        # We choose option 2.
+        self.first_closure_call_this_step = \
+            state_dict['first_closure_call_this_step']
+        self.optimizer.load_state_dict(
+            state_dict['optimizer_state_dict'])
+        # At this point, the optimizer's references to the model's 
+        # fp32 parameters are up to date.
+        # The optimizer's hyperparameters and internal buffers 
+        # are also up to date.  
+        #
+        # However, the fp32 master copies of the model's fp16 params 
+        # stored by the optimizer are still out of date.  
+        # There are two options:
+        #     1:  Refresh the master params from the model's fp16 params.  
+        #         This requires less storage but incurs precision loss.
+        #     2:  Save and restore the fp32 master copies separately.
+        #         We choose option 2.
         # 
-        # Pytorch Optimizer.load_state_dict casts saved buffers (e.g. momentum) to the type and device 
-        # of their associated parameters, because it's possible those buffers might not exist yet in 
-        # the current optimizer instance.  In our case, as long as the current FP16_Optimizer has been 
-        # constructed in the same way as the one whose state_dict we are loading, the same master params
-        # are guaranteed to exist, so we can just copy_() from the saved master params.
-        for current_group, saved_group in zip(self.fp32_from_fp16_groups, state_dict['fp32_from_fp16']):
+        # Pytorch Optimizer.load_state_dict casts saved buffers 
+        # (e.g. momentum) to the type and device of their associated 
+        # parameters, because it's possible those buffers might not 
+        # exist yet in the current optimizer instance.  
+        # In our case, as long as the current FP16_Optimizer has been 
+        # constructed in the same way as the one whose state_dict we 
+        # are loading, the same master params are guaranteed to exist, 
+        # so we can just copy_() from the saved master params.
+        for current_group, saved_group in zip(
+            self.fp32_from_fp16_groups, state_dict['fp32_from_fp16']):
             for current, saved in zip(current_group, saved_group):
                 current.data.copy_(saved.data)
 
@@ -472,16 +526,21 @@ class FP16_Optimizer(object):
         """
         If no closure is supplied, :attr:`step` should be called after 
         ``fp16_optimizer_obj.backward(loss)``.
-        :attr:`step` updates the fp32 master copy of parameters using the optimizer supplied to
-        :class:`FP16_Optimizer`'s constructor, then copies the updated fp32 params into the fp16 params
-        originally referenced by :class:`FP16_Optimizer`'s constructor, so the user may immediately run
-        another forward pass using their model.
 
-        If a closure is supplied, :attr:`step` may be called without a prior call to 
-        :attr:`backward(loss)`.
-        This control flow is identical to `ordinary Pytorch optimizer use`_ with closures.
-        However, the user should take care that any ``loss.backward()`` call within the closure
-        has been replaced by ``fp16_optimizer_obj.backward(loss)``.
+        :attr:`step` updates the fp32 master copy of parameters 
+        using the optimizer supplied to :class:`FP16_Optimizer`'s 
+        constructor, then copies the updated fp32 params into the 
+        fp16 params originally referenced by :class:`FP16_Optimizer`'s 
+        constructor, so the user may immediately run another forward 
+        pass using their model.
+
+        If a closure is supplied, :attr:`step` may be called without 
+        a prior call to :attr:`backward(loss)`.
+
+        This control flow is identical to `ordinary Pytorch optimizer 
+        use`_ with closures. However, the user should take care that 
+        any ``loss.backward()`` call within the closure has been replaced 
+        by ``fp16_optimizer_obj.backward(loss)``.
 
         Refer to https://pytorch.org/docs/stable/optim.html.
 
@@ -489,13 +548,15 @@ class FP16_Optimizer(object):
            closure (optional):  
                Closure that will be supplied to the underlying optimizer 
                originally passed to :class:`FP16_Optimizer`'s constructor.  
-               closure should call :attr:`zero_grad()` on the :class:`FP16_Optimizer` 
-               object, compute the loss, call :attr:`backward(loss)`, and return the loss.
+               closure should call :attr:`zero_grad()` on the 
+               :class:`FP16_Optimizer` object, compute the loss, 
+               call :attr:`backward(loss)`, and return the loss.
 
         Example with closure::
 
-            # optimizer is assumed to be an FP16_Optimizer object, previously constructed from an 
-            # existing pytorch optimizer.
+            # optimizer is assumed to be an FP16_Optimizer object, 
+            # previously constructed from an existing pytorch optimizer.
+
             for input, target in dataset:
                 def closure():
                     optimizer.zero_grad()
@@ -507,7 +568,8 @@ class FP16_Optimizer(object):
                 optimizer.step(closure)
 
         .. warning::
-            Currently, calling :attr:`step` with a closure is not compatible with dynamic loss scaling.
+            Currently, calling :attr:`step` with a closure is not 
+            compatible with dynamic loss scaling.
 
         .. _`ordinary Pytorch optimizer use`:
             http://pytorch.org/docs/master/optim.html#optimizer-step-closure
