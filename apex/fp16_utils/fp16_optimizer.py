@@ -5,15 +5,20 @@ from torch.nn.parameter import Parameter
 from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 
 from .loss_scaler import DynamicLossScaler, LossScaler
-from .fp16util import model_grads_to_master_grads, master_params_to_model_params, clip_grad_norm
+from .fp16util import model_grads_to_master_grads, \
+                      master_params_to_model_params, \
+                      clip_grad_norm
 
 # TODO:  Update overflow check + downscale to use Carl's fused kernel.
 class FP16_Optimizer(object):
     """
-    :class:`FP16_Optimizer` is designed to wrap an existing PyTorch optimizer, 
-    and manage static or dynamic loss scaling and master weights in a manner transparent to the user.
-    For standard use, only two lines must be changed:  creating the :class:`FP16_Optimizer` instance,
-    and changing the call to ``backward``.
+    :class:`FP16_Optimizer` is designed to wrap an existing 
+    PyTorch optimizer, and manage static or dynamic loss scaling 
+    and master weights in a manner transparent to the user.
+
+    For standard use, only two lines must be changed:  
+    creating the :class:`FP16_Optimizer` instance, and changing 
+    the call to ``backward``.
 
     Example::
 
@@ -31,31 +36,61 @@ class FP16_Optimizer(object):
 
         ...
         optimizer = FP16_Optimizer(optimizer, dynamic_loss_scale=True)
-                                   # optional arg to control dynamic loss scaling behavior
-                                   # dynamic_loss_args={'scale_window' : 500})
-                                   # Usually, dynamic_loss_args is not necessary. 
+        # optional arg to control dynamic loss scaling behavior
+        # dynamic_loss_args={'scale_window' : 500})
+        # Usually, dynamic_loss_args is not necessary. 
 
     Args:
-        init_optimizer (torch.optim.optimizer):  Existing optimizer created with the parameters to optimize.  Internally, :class:`FP16_Optimizer` replaces the passed optimizer's fp16 parameters, if any, with fp32 master parameters copied from the original ones.  :class:`FP16_Optimizer` also stores references to the original fp16 parameters, and updates these fp16 parameters from the master fp32 copy at the end of each :attr:`step`.  
-        static_loss_scale (float, optional, default=1.0):  Loss scale used internally to scale gradients computed by the model.  Any fp16 gradients will be copied to fp32, then downscaled before being applied to the fp32 master params, so ``static_loss_scale`` should not affect learning rate.
-        dynamic_loss_scale (bool, optional, default=False):  Use dynamic loss scaling.  If True, this will override any ``static_loss_scale`` option.
-        dynamic_loss_args (dict, optional, default=None):  Dict of kwargs that will be forwarded to the internal :class:`DynamicLossScaler` instance's constructor.  Keys of this dict must match kwargs accepted by :class:`DynamicLossScaler`'s constructor.  If ``dynamic_loss_args`` is unspecified, :class:`DynamicLossScaler`'s defaults will be used.
-        verbose (bool, optional, default=True):  By default, FP16_Optimizer's constructor prints out the parameters and parameter groups it is ingesting, as a sanity check.  If this becomes annoying (e.g. for large models), it can be disabled by passing ``verbose=False``.  ``verbose=False`` will not disable printing when the loss scale is readjusted during dynamic loss scaling.
+        init_optimizer (torch.optim.optimizer):  
+            Existing optimizer created with the parameters to optimize.  
+            Internally, :class:`FP16_Optimizer` replaces the passed 
+            optimizer's fp16 parameters, if any, with fp32 master 
+            parameters copied from the original ones.  
+            :class:`FP16_Optimizer` also stores references to the original 
+            fp16 parameters, and updates these fp16 parameters from the 
+            master fp32 copy at the end of each :attr:`step`.  
+        static_loss_scale (float, optional, default=1.0):  
+            Loss scale used internally to scale gradients computed by 
+            the model.  Any fp16 gradients will be copied to fp32, 
+            then downscaled before being applied to the fp32 master params, 
+            so ``static_loss_scale`` should not affect learning rate.
+        dynamic_loss_scale (bool, optional, default=False):  
+            Use dynamic loss scaling.  If True, this will override any 
+            ``static_loss_scale`` option.
+        dynamic_loss_args (dict, optional, default=None):  
+            Dict of kwargs that will be forwarded to the internal 
+            :class:`DynamicLossScaler` instance's constructor.  Keys of 
+            this dict must match kwargs accepted by :class:`DynamicLossScaler`'s 
+            constructor.  If ``dynamic_loss_args`` is unspecified, 
+            :class:`DynamicLossScaler`'s defaults will be used.
+        verbose (bool, optional, default=True):  
+            By default, FP16_Optimizer's constructor prints out the 
+            parameters and parameter groups it is ingesting, as a sanity check.  
+            If this becomes annoying (e.g. for large models), it can be 
+            disabled by passing ``verbose=False``.  ``verbose=False`` will 
+            not disable printing when the loss scale is readjusted during 
+            dynamic loss scaling.
 
-    ``init_optimizer`` is expected to have been constructed in the ordinary way.  
-    It is recommended (although not required) that the newly constructed :class:`FP16_Optimizer` instance be 
-    named to replace ``init_optimizer``, for two reasons:  
+    ``init_optimizer`` is expected to have been constructed 
+    in the ordinary way.  
+    It is recommended (although not required) that the newly 
+    constructed :class:`FP16_Optimizer` instance be named to 
+    replace ``init_optimizer``, for two reasons: 
+
     First, it means that references to the same name
-    later in the file will not have to change.  
-    Second, :class:`FP16_Optimizer` reserves the right (as an implementation detail) to 
-    modify ``init_optimizer``.  If you do choose a unique name for the new
-    :class:`FP16_Optimizer` instance, you should only work with this new instance,
-    because the preexisting optimizer might no longer behave as expected.
+    later in the file will not have to change. 
+
+    Second, :class:`FP16_Optimizer` reserves the right 
+    (as an implementation detail) to modify ``init_optimizer``.  
+    If you do choose a unique name for the new :class:`FP16_Optimizer` 
+    instance, you should only work with this new instance, because the 
+    preexisting optimizer might no longer behave as expected.
 
     ``init_optimizer`` may be any Pytorch optimizer. 
-    It may contain a mixture of fp16 and fp32 parameters organized into any number of 
-    ``param_groups`` with different hyperparameters.  The :class:`FP16_Optimizer` constructor will 
-    ingest these ``param_groups`` and remember them. 
+    It may contain a mixture of fp16 and fp32 parameters organized 
+    into any number of ``param_groups`` with different hyperparameters.  
+    The :class:`FP16_Optimizer` constructor will ingest these 
+    ``param_groups`` and remember them. 
 
     Calls to ::
 
@@ -65,43 +100,50 @@ class FP16_Optimizer(object):
 
         optimizer.backward(loss)  
 
-    because :class:`FP16_Optimizer` requires ownership of the backward pass to implement 
-    loss scaling and copies to master gradients.
+    because :class:`FP16_Optimizer` requires ownership of the 
+    backward pass to implement loss scaling and copies to master 
+    gradients.
 
     .. note::
-        Loss scaling, either static or dynamic, is orthogonal to learning rate, because gradients
-        are downscaled before being applied.  This means that adjusting the loss scale, or using
-        dynamic loss scaling, should not require retuning the learning rate or any other 
+        Loss scaling, either static or dynamic, is orthogonal to learning 
+        rate, because gradients are downscaled before being applied.  
+        This means that adjusting the loss scale, or using dynamic loss scaling, 
+        should not require retuning the learning rate or any other 
         hyperparameters.
 
 
     **Advanced options**
 
-    **Closures**:  :class:`FP16_Optimizer` can wrap a Pytorch optimizer that receives a closure.
+    **Closures**:  :class:`FP16_Optimizer` can wrap a Pytorch optimizer 
+    that receives a closure.
     See docstring for :attr:`step`.
 
     **Gradient clipping**:  Use :attr:`clip_master_grads`.
     
-    **Multiple losses**:  If your model accumulates gradients from multiple losses,
-    this can be made more efficient by supplying ``update_master_grads=False``
-    to :attr:`backward`.  See docstring for :attr:`backward`.
+    **Multiple losses**:  If your model accumulates gradients 
+    from multiple losses, this can be made more efficient by 
+    supplying ``update_master_grads=False`` to :attr:`backward`.  
+    See docstring for :attr:`backward`.
 
-    **Manually adjusting loss scale**:  The current loss scale can be retrieved or set via ::
+    **Manually adjusting loss scale**:  
+    The current loss scale can be retrieved or set via ::
 
         print(optimizer.loss_scale)
         optimizer.loss_scale = new_loss_scale
 
-    For static loss scaling, manually adjusting the loss scale over time is a reasonable
-    thing to do.  During later epochs, gradients may become smaller, and a 
-    higher loss scale may be required, analogous to scheduling the learning rate.  Dynamic loss
-    scaling is more subtle (see :class:`DynamicLossScaler`) and in this case, manually adjusting 
-    the loss scale is not recommended.
+    For static loss scaling, manually adjusting the loss scale 
+    over time is a reasonable thing to do.  During later epochs, 
+    gradients may become smaller, and a higher loss scale may be 
+    required, analogous to scheduling the learning rate.  Dynamic 
+    loss scaling is more subtle (see :class:`DynamicLossScaler`) 
+    and in this case, manually adjusting the loss scale is not 
+    recommended.
 
-    **Multi_GPU training**:  If the wrapped ``init_optimizer`` was created from a model wrapped in
-    Pytorch DistributedDataParallel or Apex DistributedDataParallel, :class:`FP16_Optimizer` 
-    should still work as intended.
+    **Multi_GPU training**:  
+    If the wrapped ``init_optimizer`` was created from a model 
+    wrapped in Pytorch DistributedDataParallel or Apex DistributedDataParallel, 
+    :class:`FP16_Optimizer` should still work as intended.
     """
-
     def __init__(self, 
                  init_optimizer, 
                  static_loss_scale=1.0, 
@@ -132,6 +174,13 @@ class FP16_Optimizer(object):
             )
 
             # Parameter buffers for different cases.
+            # These buffers are used to seperate the parameters in 
+            # current parameters group according their data types.
+            #
+            # `fp16_params_this_group` represents all fp16 type 
+            # parameters in current parameters; 
+            # `fp32_from_fp16_params_this_group` means fp32 copy of 
+            # fp16 parameters in current parameters group. 
             fp16_params_this_group = []
             fp32_params_this_group = []
             fp32_from_fp16_params_this_group = []
@@ -156,51 +205,76 @@ class FP16_Optimizer(object):
                         # with float32 copy.
                         param_group['params'][i] = master_param
 
-                        # Pute float32 copy in corresponding buffer.
+                        # Put float32 copy in corresponding buffer.
                         fp32_from_fp16_params_this_group.append(master_param)
 
                         # Reset existing state dict key to the new master param.
-                        # We still need to recast per-param state tensors, if any, to FP32.
+                        # We still need to recast per-param state tensors, 
+                        # if any, to FP32.
                         if param in self.optimizer.state:
                             # Refer to pytorch documents, the concept `optimizer.state` 
-                            # descripts the parameters group, so the following codes 
-                            # adds a new group to `optimizer.state` which is returned by 
-                            # `optimizer.state_dict()`, and this new group is used for 
-                            # saving float32 copy of float16 parameters.
+                            # descripts the parameters and parameters group, 
+                            # so the following codes adds a new group to 
+                            # `optimizer.state` which is returned by 
+                            # `optimizer.state_dict()`, and this new group is used 
+                            # for saving float32 copy of float16 parameters.
                             #
                             # Tip 1: `.pop` is method of python dict.
                             # Tip 2: `optimizer.state` is the element of the return of 
                             #    `optimizer.state_dict()`. The detail could be found at 
                             #    pytorch official documents.
                             #
-                            # The following codes remove the `param` and its corresponding 
-                            # value in original `optimizer.state` dict, and add a new key 
-                            # `master_param` to `optimizer.state` dict which is the float32 
-                            # copy of the removed key `param`, and its values is float16 
-                            # `param`'s corresponding value.
+                            # The following codes remove the `param` and its 
+                            # corresponding value in original `optimizer.state` 
+                            # dict, and add a new key `master_param` to 
+                            # `optimizer.state` dict which is the float32 
+                            # copy of the removed key `param`, and its values 
+                            # is float16 `param`'s corresponding value.
                             self.optimizer.state[master_param] = \
                                 self.optimizer.state.pop(param) 
                     # If float32 type parameters.
                     elif param.type() == 'torch.cuda.FloatTensor':
-                        self.maybe_print("FP16_Optimizer received torch.cuda.FloatTensor with {}"
-                                         .format(param.size()))
-                        # This case does not need any aprameters' copy since parameters 
-                        # thenselve saved in float32 data type.
+                        self.maybe_print(
+                            "FP16_Optimizer received torch.cuda.FloatTensor with {}"
+                            .format(param.size())
+                        )
+                        # This case does not need any aprameters' copy since 
+                        # parameters themselve saved in float32 data type.
+                        #
+                        # `fp32_params_this_group` means fp32 type parameters in 
+                        # this parameters group. 
                         fp32_params_this_group.append(param)
                         param_group['params'][i] = param
                     else:
-                        raise TypeError("Wrapped parameters must be either "
-                                        "torch.cuda.FloatTensor or torch.cuda.HalfTensor. "  
-                                        "Received {}".format(param.type()))
-           
-            # The the list appended to several group could be empty or 
+                        raise TypeError(
+                            "Wrapped parameters must be either "
+                            "torch.cuda.FloatTensor or torch.cuda.HalfTensor. "  
+                            "Received {}".format(param.type())
+                        )
+            # The list appended to several group could be empty or 
             # not empty depend on particular case.
+            #
+            # These "self.*" buffers will cache seperated parameters 
+            # in the order of parameters groups' iteration.
+            #
+            # One important thing is, only the parameters in 
+            # `self.fp32_from_fp16_groups` where detached, 
+            # but parameters in `self.fp16_groups` and 
+            # `self.fp32_from_fp32_groups` were not detached, 
+            # which means their corresponding `torch.Tensor`s 
+            # will calculate gradients during back propogation.
             self.fp16_groups.append(fp16_params_this_group)
-            self.fp32_from_fp16_groups.append(fp32_from_fp16_params_this_group)
+            self.fp32_from_fp16_groups.append(
+                fp32_from_fp16_params_this_group)
             self.fp32_from_fp32_groups.append(fp32_params_this_group)
 
         # Leverage state_dict() and load_state_dict() to recast 
         # preexisting per-param state tensors
+        #
+        # In above codes, all non-fp32 data type parameters have 
+        # been converted to fp32 type, the reason of reloading 
+        # `state_dict` is to make sure the parameters are in 
+        # fp32 type.
         self.optimizer.load_state_dict(self.optimizer.state_dict())
         # alternative way to cast per-param state tensors:
         # self.optimizer.load_state_dict(init_state_dict)
@@ -229,28 +303,35 @@ class FP16_Optimizer(object):
             print(msg)
             
     def __getstate__(self):
-        raise RuntimeError("FP16_Optimizer should be serialized using state_dict().")
+        raise RuntimeError(
+            "FP16_Optimizer should be serialized using state_dict().")
 
     def __setstate__(self, state):
-        raise RuntimeError("FP16_Optimizer should be deserialized using load_state_dict().")
+        raise RuntimeError(
+            "FP16_Optimizer should be deserialized using load_state_dict().")
 
     def zero_grad(self, set_grads_to_None=False):
         """ Zero fp32 and fp16 parameter grads.
         Both float16 and float32 parameter copy will be set to zero.
         """
-        # In principle, only the .grad attributes of the model params need to be zeroed,
-        # because gradients are copied into the FP32 master params.  However, we zero
+        # In principle, only the .grad attributes of the model 
+        # params need to be zeroed, because gradients are copied 
+        # into the FP32 master params.  However, we zero
         # all gradients owned by the optimizer, just to be safe:
         #
         # There are groups for float16/float32 tensors
+        #
+        # Notice, the parameters' tensors will be automatically 
+        # included into `optimizer.param_groups` if they were 
+        # not detached from the computational graph. 
         for group in self.optimizer.param_groups:
-             for p in group['params']:
-                 if set_grads_to_None:
-                     p.grad = None
-                 else:
-                     if p.grad is not None:
-                         p.grad.detach_()
-                         p.grad.zero_()
+            for p in group['params']:
+                if set_grads_to_None:
+                    p.grad = None
+                else:
+                    if p.grad is not None:
+                        p.grad.detach_()
+                        p.grad.zero_()
 
         # (for safe, )Zero fp16 gradients owned by the model:
         for fp16_group in self.fp16_groups:
@@ -283,7 +364,9 @@ class FP16_Optimizer(object):
     def _master_params_to_model_params(self):
         for fp16_group, fp32_from_fp16_group in \
             zip(self.fp16_groups, self.fp32_from_fp16_groups):
-            master_params_to_model_params(fp16_group, fp32_from_fp16_group)
+            master_params_to_model_params(
+                fp16_group, fp32_from_fp16_group
+            )
 
     # To consider:  Integrate distributed with this wrapper by registering a hook on each variable 
     # that does the overflow check, gradient copy + downscale, and fp32 allreduce in a different stream.
@@ -507,9 +590,7 @@ class FP16_Optimizer(object):
             (see second Note), which are guaranteed to be fp32.
         5. Finally, master grads are divided by loss_scale.
 
-        As above descript, the gradient calcutation (also backward) operation 
-        will using float16 data type, while parameters update will using 
-        float32.
+        As above descript, the gradient calcutation (also backward)
 
         In this way, after :attr:`backward`, the master params have fresh gradients,
         and :attr:`step` may be called.

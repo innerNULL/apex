@@ -16,9 +16,11 @@ def fused_norm(input):
 
 class FP16_Optimizer(object):
     """
-    :class:`FP16_Optimizer` A cutdown version of apex.fp16_utils.FP16_Optimizer.
-    Design to be used in the same way but support only fused optimizers in apex.
-    Refer to apex.fp16_utils documents for more information.
+    :class:`FP16_Optimizer` 
+        A cutdown version of `apex.fp16_utils.FP16_Optimizer`.
+        Design to be used in the same way but support only fused 
+        optimizers in apex. Refer to apex.fp16_utils documents for 
+        more information.
 
     Example::
 
