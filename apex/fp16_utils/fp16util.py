@@ -24,7 +24,7 @@ class tofp16(nn.Module):
 def BN_convert_float(module):
     '''
     Designed to work with network_to_half.
-    Since batch normal is not an "average" included 
+    Since batch normal is not an only "average" included 
     operation across samples which can offset the error
     caused by lower the precision, so, 
     BatchNorm layers need parameters in single precision.
@@ -34,10 +34,17 @@ def BN_convert_float(module):
     fn to all modules, parameters, and buffers. Thus we wouldn't
     be able to guard the float conversion based on the module type.
     '''
+    # A single batchnorm module case. 
+    # This case will be met when this iteration function 
+    # iterates to the most inside layer. An in that case, 
+    # the function will convert all batchnorm operation 
+    # to fp32 form.
     if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
         module.float()
+
     for child in module.children():
         BN_convert_float(child)
+
     return module
 
 

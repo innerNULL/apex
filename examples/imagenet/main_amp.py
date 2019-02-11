@@ -22,7 +22,10 @@ try:
     from apex.fp16_utils import *
     from apex import amp
 except ImportError:
-    raise ImportError("Please install apex from https://www.github.com/nvidia/apex to run this example.")
+    raise ImportError(
+        """Please install apex from 
+           https://www.github.com/nvidia/apex 
+           to run this example.""")
 
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")

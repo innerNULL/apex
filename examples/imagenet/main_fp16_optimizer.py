@@ -21,7 +21,11 @@ try:
     from apex.parallel import DistributedDataParallel as DDP
     from apex.fp16_utils import *
 except ImportError:
-    raise ImportError("Please install apex from https://www.github.com/nvidia/apex to run this example.")
+    raise ImportError(
+        """Please install apex from 
+           https://www.github.com/nvidia/apex 
+           to run this example.""")
+
 
 model_names = sorted(name for name in models.__dict__
                      if name.islower() and not name.startswith("__")
@@ -30,6 +34,8 @@ model_names = sorted(name for name in models.__dict__
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 parser.add_argument('data', metavar='DIR',
                     help='path to dataset')
+
+# Optional arguments.
 parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet18',
                     choices=model_names,
                     help='model architecture: ' +
@@ -44,7 +50,13 @@ parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
 parser.add_argument('-b', '--batch-size', default=256, type=int,
                     metavar='N', help='mini-batch size per process (default: 256)')
 parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
-                    metavar='LR', help='Initial learning rate.  Will be scaled by <global batch size>/256: args.lr = args.lr*float(args.batch_size*args.world_size)/256.  A warmup schedule will also be applied over the first 5 epochs.')
+                    metavar='LR', 
+                    help="""Initial learning rate.  
+                            Will be scaled by <global batch size>/256: 
+                            args.lr = 
+                            args.lr*float(args.batch_size*args.world_size)/256.
+                            A warmup schedule will also be applied over 
+                            the first 5 epochs.""")
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                     help='momentum')
 parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
@@ -61,10 +73,12 @@ parser.add_argument('--pretrained', dest='pretrained', action='store_true',
 parser.add_argument('--fp16', action='store_true',
                     help='Run model fp16 mode.')
 parser.add_argument('--static-loss-scale', type=float, default=1,
-                    help='Static loss scale, positive power of 2 values can improve fp16 convergence.')
+                    help="""Static loss scale, positive power of 2 
+                            values can improve fp16 convergence.""")
 parser.add_argument('--dynamic-loss-scale', action='store_true',
-                    help='Use dynamic loss scaling.  If supplied, this argument supersedes ' +
-                    '--static-loss-scale.')
+                    help="""Use dynamic loss scaling.  
+                            If supplied, this argument supersedes 
+                            --static-loss-scale.""")
 parser.add_argument('--prof', dest='prof', action='store_true',
                     help='Only run 10 iterations for profiling.')
 parser.add_argument('--deterministic', action='store_true')
@@ -80,6 +94,8 @@ def fast_collate(batch):
     targets = torch.tensor([target[1] for target in batch], dtype=torch.int64)
     w = imgs[0].size[0]
     h = imgs[0].size[1]
+    # The following will put all imgs data together in a tensor, 
+    # and the dimension order is n, c, h, w.
     tensor = torch.zeros( (len(imgs), 3, h, w), dtype=torch.uint8 )
     for i, img in enumerate(imgs):
         nump_array = np.asarray(img, dtype=np.uint8)
@@ -100,6 +116,7 @@ if args.deterministic:
     cudnn.deterministic = True
     torch.manual_seed(args.local_rank)
 
+
 def main():
     global best_prec1, args
 
@@ -118,11 +135,16 @@ def main():
         args.world_size = torch.distributed.get_world_size()
 
     if args.fp16:
-        assert torch.backends.cudnn.enabled, "fp16 mode requires cudnn backend to be enabled."
+        assert torch.backends.cudnn.enabled, \
+            "fp16 mode requires cudnn backend to be enabled."
 
     if args.static_loss_scale != 1.0:
         if not args.fp16:
-            print("Warning:  if --fp16 is not used, static_loss_scale will be ignored.")
+            print(
+                """Warning:  
+                   if --fp16 is not used, 
+                   static_loss_scale will be ignored."""
+            )
 
     # create model
     if args.pretrained:
@@ -141,17 +163,20 @@ def main():
     if args.fp16:
         model = network_to_half(model)
     if args.distributed:
-        # By default, apex.parallel.DistributedDataParallel overlaps communication with 
-        # computation in the backward pass.
+        # By default, apex.parallel.DistributedDataParallel 
+        # overlaps communication with computation in the 
+        # backward pass.
         # model = DDP(model)
-        # delay_allreduce delays all communication to the end of the backward pass.
+        # delay_allreduce delays all communication to the 
+        # end of the backward pass.
         model = DDP(model, delay_allreduce=True)
 
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda()
 
     # Scale learning rate based on global batch size
-    args.lr = args.lr*float(args.batch_size*args.world_size)/256. 
+    args.lr = \
+        args.lr * float(args.batch_size * args.world_size) / 256. 
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
@@ -179,8 +204,18 @@ def main():
         resume()
 
     # Data loading code
-    traindir = os.path.join(args.data, 'train')
-    valdir = os.path.join(args.data, 'val')
+    if os.path.exists(args.data):
+        traindir = os.path.join(args.data, 'train')
+        if not os.path.exists(traindir):
+            print("""WARNING: using validation data as training data, 
+                     since original `traindir` does not exist.""")
+            traindir = os.path.join(args.data, 'val')
+        valdir = os.path.join(args.data, 'val')
+        if not os.path.exists(valdir):
+            raise Exception(
+                "both `traindir` and `valdir` path does not exist")
+    else:
+        raise Exception("`args.data` path not exist")
 
     if(args.arch == "inception_v3"):
         crop_size = 299
@@ -189,6 +224,9 @@ def main():
         crop_size = 224
         val_size = 256
 
+    # Using pytorch data loader tools.
+    # Notice, the handeling method of training and 
+    # validation data are different.
     train_dataset = datasets.ImageFolder(
         traindir,
         transforms.Compose([
@@ -205,24 +243,37 @@ def main():
     train_sampler = None
     val_sampler = None
     if args.distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-        val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset)
+        train_sampler = \
+            torch.utils.data \
+                 .distributed \
+                 .DistributedSampler(train_dataset)
+        val_sampler = \
+            torch.utils.data \
+                 .distributed \
+                 .DistributedSampler(val_dataset)
 
     train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
-        num_workers=args.workers, pin_memory=True, sampler=train_sampler, collate_fn=fast_collate)
-
+        train_dataset, 
+        batch_size=args.batch_size, 
+        shuffle=(train_sampler is None),
+        num_workers=args.workers, 
+        pin_memory=True, 
+        sampler=train_sampler, 
+        collate_fn=fast_collate
+    )
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
         batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True,
         sampler=val_sampler,
-        collate_fn=fast_collate)
+        collate_fn=fast_collate
+    )
 
     if args.evaluate:
         validate(val_loader, model, criterion)
         return
 
+    # Training
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
@@ -247,11 +298,17 @@ def main():
             }, is_best)
 
 class data_prefetcher():
+    """Data loader class.
+    """
     def __init__(self, loader):
         self.loader = iter(loader)
         self.stream = torch.cuda.Stream()
-        self.mean = torch.tensor([0.485 * 255, 0.456 * 255, 0.406 * 255]).cuda().view(1,3,1,1)
-        self.std = torch.tensor([0.229 * 255, 0.224 * 255, 0.225 * 255]).cuda().view(1,3,1,1)
+        self.mean = \
+            torch.tensor([0.485 * 255, 0.456 * 255, 0.406 * 255]) \
+                 .cuda().view(1,3,1,1)
+        self.std = \
+            torch.tensor([0.229 * 255, 0.224 * 255, 0.225 * 255]) \
+                 .cuda().view(1,3,1,1)
         if args.fp16:
             self.mean = self.mean.half()
             self.std = self.std.half()
@@ -271,7 +328,8 @@ class data_prefetcher():
                 self.next_input = self.next_input.half()
             else:
                 self.next_input = self.next_input.float()
-            self.next_input = self.next_input.sub_(self.mean).div_(self.std)
+            self.next_input = \
+                self.next_input.sub_(self.mean).div_(self.std)
             
     def next(self):
         torch.cuda.current_stream().wait_stream(self.stream)
@@ -282,13 +340,15 @@ class data_prefetcher():
 
 
 def train(train_loader, model, criterion, optimizer, epoch):
+    """ One epoch training.
+    """
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
     top5 = AverageMeter()
 
-    # switch to train mode
+    # switch to training mode
     model.train()
     end = time.time()
 
@@ -306,7 +366,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
         # measure data loading time
         data_time.update(time.time() - end)
 
-        # compute output
+        # compute output and loss
         output = model(input)
         loss = criterion(output, target)
 
@@ -329,6 +389,9 @@ def train(train_loader, model, criterion, optimizer, epoch):
         if args.fp16:
             optimizer.backward(loss)
         else:
+            # If not lower precision training, do not 
+            # need using wrapped optimizer to execute 
+            # back propogation.
             loss.backward()
         optimizer.step()
 
@@ -339,6 +402,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
         end = time.time()
         input, target = prefetcher.next()
 
+        # Formating terminal output.
         if args.local_rank == 0 and i % args.print_freq == 0 and i > 1:
             print('Epoch: [{0}][{1}/{2}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
@@ -355,6 +419,9 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
 
 def validate(val_loader, model, criterion):
+    """ Validation
+    Logically similiar with `train` function.
+    """
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
@@ -440,21 +507,31 @@ class AverageMeter(object):
 
 
 def adjust_learning_rate(optimizer, epoch, step, len_epoch):
-    """LR schedule that should yield 76% converged accuracy with batch size 256"""
+    """ Adjust learning rate
+    LR schedule that should yield 76% converged 
+    accuracy with batch size 256.
+    """
     factor = epoch // 30
 
     if epoch >= 80:
         factor = factor + 1
 
-    lr = args.lr*(0.1**factor)
+    # Dynamicaly decreasing learning rate
+    lr = args.lr * (0.1 ** factor)
 
     """Warmup"""
     if epoch < 5:
-        lr = lr*float(1 + step + epoch*len_epoch)/(5.*len_epoch)
+        lr = lr * float(1 + step + epoch * len_epoch) \
+             / (5. * len_epoch)
 
     # if(args.local_rank == 0):
     #     print("epoch = {}, step = {}, lr = {}".format(epoch, step, lr))
 
+    # This way of dynamically adjusting learning rate is not 
+    # a general method, since in this case, we have an 
+    # optimizer wrapper, which has caches of laerning rate 
+    # for each parameter group, so function can just modify 
+    # those caches.
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
@@ -476,10 +553,14 @@ def accuracy(output, target, topk=(1,)):
 
 
 def reduce_tensor(tensor):
+    """ Reduce tensors
+    Reduce sum for tensors on all nodes and average them.
+    """
     rt = tensor.clone()
     dist.all_reduce(rt, op=dist.reduce_op.SUM)
     rt /= args.world_size
     return rt
+
 
 if __name__ == '__main__':
     main()
